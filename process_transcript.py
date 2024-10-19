@@ -1,8 +1,10 @@
 import os
 import json
 
+import openai
 from openai import OpenAI
 from dotenv import load_dotenv
+from tenacity import retry , stop_after_attempt , wait_exponential , retry_if_exception_type
 
 
 import utils
@@ -11,6 +13,11 @@ load_dotenv()
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 gpt_model = os.getenv("GPT_MODEL")
 
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=2, min=2, max=30, exp_base=2),
+    retry=retry_if_exception_type((openai.APIConnectionError, openai.APITimeoutError, openai.InternalServerError )),
+)
 
 def chat_completions_request(messages, model=gpt_model, json_mode=True,  tools=None, tool_choice="auto"):
     api_params = {
@@ -100,6 +107,34 @@ def process_transcript(transcript):
         print("No function was called")
 
     utils.pretty_print_conversation(messages)
+
+
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=2, exp_base=2, min=2, max=30),
+    retry=retry_if_exception_type((openai.APIConnectionError, openai.APITimeoutError, openai.InternalServerError))
+)
+def has_moderation_issues(text):
+    """
+    Send a moderation request to OpenAI.
+
+    Parameters
+    ----------
+        text (str): The text to moderate.
+    """
+
+    # Split the text into chunks
+    chunks = utils.split_text_advanced(text)
+
+    for chunk in chunks:
+        # Send the API request and return the model's response.
+        response = client.moderations.create(input=chunk)
+
+        # Extract the value of flagged to see if the chunk violates OpenAI's content policy
+        flagged = response.results[0].flagged
+        if flagged:
+            utils.format_moderation_response(response, chunk)
+            return True
 
 
 if __name__ == "__main__":
